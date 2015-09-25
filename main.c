@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <limits.h>
+#include <signal.h>
+
+char **split_line(char* line, size_t* numtokens);
 
 #define TOK_SEP " \n"
 char **split_line(char *line, size_t *numtokens) {
@@ -48,13 +52,13 @@ int launch(char **args) {
     perror("Unknown error");
   } else {
     wpid = waitpid(pid, &status, WUNTRACED);
-  } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+  };
   return 1;
 }
 
 int my_cd(char **args) {
-  if (args[1] == NULL || args[2] != NULL) {
-    fprintf(stderr, "cd: wrong number of argumetns\n");
+  if (!args[1] || args[2]) {
+    fprintf(stderr, "cd: wrong number of arguments\n");
   } else {
     if (chdir(args[1]) == -1)
       printf("[%s]: cannot change directory\n", args[1]);
@@ -91,6 +95,13 @@ int execute(char **args) {
   if (args[0] == NULL) 
     return 1;
 
+  setenv("PATH","/bin:/usr/bin:.",1);
+
+  signal(SIGINT, SIG_DFL);
+  signal(SIGTERM, SIG_DFL);
+  signal(SIGQUIT, SIG_DFL);
+  signal(SIGTSTP, SIG_DFL);
+
   for (i = 0; i < num_commands(); i++) {
     if (strcmp(args[0], command[i]) == 0) {
       return (*function[i])(args);
@@ -101,6 +112,7 @@ int execute(char **args) {
 }
 
 void loop(void){
+  char current_dir[PATH_MAX+1];
   char *line = NULL;
   size_t size;
 
@@ -109,12 +121,19 @@ void loop(void){
 
   int status;
 
+  signal(SIGINT,SIG_IGN); 
+  signal(SIGQUIT,SIG_IGN); 
+  signal(SIGTERM,SIG_IGN); 
+  signal(SIGTSTP,SIG_IGN);
+
   do {
-    printf("$ ");
+    getcwd(current_dir, PATH_MAX+1);
+    printf("[3150 shell:%s]$ ", current_dir);
     if (getline(&line, &size, stdin) == -1){
       printf("\n");
       break;
     }
+    line[strlen(line)-1] = '\0';
     args = split_line(line, &numtokens);
     size_t i;
     for (i = 0; i < numtokens; i++){

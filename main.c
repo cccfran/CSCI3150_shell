@@ -6,45 +6,64 @@
 #include <limits.h>
 #include <signal.h>
 
-char **split_line(char* line, size_t* numtokens);
+char current_dir[PATH_MAX+1];
+char *line;
+size_t lineSize;
+char **args;
+size_t numtokens;
+int state = 1;
 
-#define TOK_SEP " \n"
-char **split_line(char *line, size_t *numtokens) {
+
+int builtInCommands();
+void handler();
+void launch();
+void my_cd();
+void my_exit();
+void printArgs();
+void prompt();
+void splitLine();
+
+
+void splitLine() {
   size_t tokens_alloc = 1;
   size_t tokens_used = 0;
-  char **tokens = calloc(tokens_alloc, sizeof(char*));
+  args = calloc(tokens_alloc, sizeof(char*));
 
   char *token;
 
-  token = strtok(line, TOK_SEP);
+  token = strtok(line, " ");
   while (token != NULL) {
     if (tokens_used == tokens_alloc) {
       tokens_alloc *= 2;
-      tokens = realloc(tokens, tokens_alloc * sizeof(char*));
+      args = realloc(args, tokens_alloc * sizeof(char*));
     }
-    tokens[tokens_used++] = token;
+    args[tokens_used++] = token;
 
-    token = strtok(NULL, TOK_SEP);
+    token = strtok(NULL, " ");
   }
 
   if (tokens_used == 0){
-    free(tokens);
-    tokens = NULL;
+    free(args);
+    args = NULL;
   } else {
-    tokens[tokens_used] = NULL;
+    args[tokens_used] = NULL;
   }
-  *numtokens = tokens_used;
-
-  return tokens;
+  numtokens = tokens_used;
 }
 
-int launch(char **args) {
+void launch() {
   pid_t pid, wpid;
   int status;
 
   pid = fork();
 
   if (pid == 0) {
+    // set the signal handling back to default
+    signal(SIGINT, SIG_DFL);
+    signal(SIGTERM, SIG_DFL);
+    signal(SIGQUIT, SIG_DFL);
+    signal(SIGTSTP, SIG_DFL);
+
     if (execvp(args[0], args) == -1)
       perror("Unknown error");
     exit(-1);
@@ -53,73 +72,70 @@ int launch(char **args) {
   } else {
     wpid = waitpid(pid, &status, WUNTRACED);
   };
-  return 1;
 }
 
-int my_cd(char **args) {
-  if (!args[1] || args[2]) {
-    fprintf(stderr, "cd: wrong number of arguments\n");
-  } else {
+void my_cd() {
+  if (args[1] && !args[2]) {
     if (chdir(args[1]) == -1)
       printf("[%s]: cannot change directory\n", args[1]);
+  } else {
+    fprintf(stderr, "cd: wrong number of arguments\n");
   }
-  return 1;
 }
 
-int my_exit(char **args) {
+void my_exit() {
   if (args[1] != NULL) {
     fprintf(stderr, "exit: wrong number of arguments");
-    return 1;
   } else {
-    return 0;
+    exit(EXIT_SUCCESS);
   }
 }
 
-char *command[] = {
-  "cd",
-  "exit"
-};
-
-int num_commands() {
-  return sizeof(command) / sizeof(char *);
-}
-
-int (*function[]) (char **) = {
-  &my_cd,
-  &my_exit
-};
-
-int execute(char **args) {
-  int i;
-
-  if (args[0] == NULL) 
+// built-in commands include: cd, exit
+// return 1 if built-in, 0 otherwise
+int builtInCommands() {
+  if (!strcmp("cd", args[0])) {
+    my_cd();
     return 1;
-
-  setenv("PATH","/bin:/usr/bin:.",1);
-
-  signal(SIGINT, SIG_DFL);
-  signal(SIGTERM, SIG_DFL);
-  signal(SIGQUIT, SIG_DFL);
-  signal(SIGTSTP, SIG_DFL);
-
-  for (i = 0; i < num_commands(); i++) {
-    if (strcmp(args[0], command[i]) == 0) {
-      return (*function[i])(args);
-    }
   }
-
-  return launch(args);
+  if (!strcmp("exit", args[0])) {
+    my_exit();
+  }
+  return 0;
 }
 
-void loop(void){
-  char current_dir[PATH_MAX+1];
-  char *line = NULL;
-  size_t size;
+void handler() {
+  if (args == NULL) {
+    return;
+  }
+  if (builtInCommands() == 0) {
+    setenv("PATH","/bin:/usr/bin:.",1);    
+    launch();
+  }
+}
 
-  char **args;
-  size_t numtokens;
+void printArgs() {
+  size_t i;
+  for (i = 0; i < numtokens; i++){
+    printf("\ttokens: \"%s\"\n", args[i]);
+  }
+}
 
-  int status;
+void prompt() {
+  getcwd(current_dir, PATH_MAX+1);
+  printf("[3150 shell:%s]$ ", current_dir);
+}
+
+void getLine() {
+  if (getline(&line, &lineSize, stdin) == -1) {
+    printf("\n");
+    exit(EXIT_SUCCESS);
+  }
+  line[strlen(line)-1] = '\0';
+  splitLine();
+}
+
+int main(int argc, char **argv){
 
   signal(SIGINT,SIG_IGN); 
   signal(SIGQUIT,SIG_IGN); 
@@ -127,33 +143,18 @@ void loop(void){
   signal(SIGTSTP,SIG_IGN);
 
   do {
-    getcwd(current_dir, PATH_MAX+1);
-    printf("[3150 shell:%s]$ ", current_dir);
-    if (getline(&line, &size, stdin) == -1){
-      printf("\n");
-      break;
-    }
-    line[strlen(line)-1] = '\0';
-    args = split_line(line, &numtokens);
-    size_t i;
-    for (i = 0; i < numtokens; i++){
-      printf("\ttokens: \"%s\"\n", args[i]);
-    }
-    
-    if (args == NULL) {			   
-      continue;
-    }
-    status = execute(args);
+    prompt();
+    getLine();
+   
+    printArgs();
+    handler();
 
     if (args != NULL)
       free(args);
     if (line != NULL)
       line = NULL;
 
-  } while (status);
-}
+  } while (state);
 
-int main(int argc, char **argv) {
-  loop();
   return 0;
 }

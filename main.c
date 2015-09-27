@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <signal.h>
+#include <errno.h>
 
 char current_dir[PATH_MAX+1];
 char *line;
@@ -15,6 +16,7 @@ int state = 1;
 
 
 int builtInCommands();
+void cleanup();
 void handler();
 void launch();
 void my_cd();
@@ -27,10 +29,9 @@ void splitLine();
 void splitLine() {
   size_t tokens_alloc = 1;
   size_t tokens_used = 0;
-  args = calloc(tokens_alloc, sizeof(char*));
-
   char *token;
 
+  args = calloc(tokens_alloc, sizeof(char*));
   token = strtok(line, " ");
   while (token != NULL) {
     if (tokens_used == tokens_alloc) {
@@ -38,7 +39,6 @@ void splitLine() {
       args = realloc(args, tokens_alloc * sizeof(char*));
     }
     args[tokens_used++] = token;
-
     token = strtok(NULL, " ");
   }
 
@@ -56,7 +56,6 @@ void launch() {
   int status;
 
   pid = fork();
-
   if (pid == 0) {
     // set the signal handling back to default
     signal(SIGINT, SIG_DFL);
@@ -64,8 +63,13 @@ void launch() {
     signal(SIGQUIT, SIG_DFL);
     signal(SIGTSTP, SIG_DFL);
 
-    if (execvp(args[0], args) == -1)
-      perror("Unknown error");
+    if (execvp(args[0], args) == -1) {
+      if (errno == 2) {
+	printf("%s: command not found\n", args[0]);
+      } else {
+	printf("%s: unknown error\n", args[0]);
+      }
+    }
     exit(-1);
   } else if (pid < 0){
     perror("Unknown error");
@@ -90,6 +94,7 @@ void my_exit() {
     exit(EXIT_SUCCESS);
   }
 }
+
 
 // built-in commands include: cd, exit
 // return 1 if built-in, 0 otherwise
@@ -135,6 +140,14 @@ void getLine() {
   splitLine();
 }
 
+void cleanup() {
+  while (numtokens) {
+    args[numtokens--] = NULL;
+  }
+  free(args);
+  line = NULL;
+}
+
 int main(int argc, char **argv){
 
   signal(SIGINT,SIG_IGN); 
@@ -142,19 +155,14 @@ int main(int argc, char **argv){
   signal(SIGTERM,SIG_IGN); 
   signal(SIGTSTP,SIG_IGN);
 
-  do {
+  while (state) {
     prompt();
+
     getLine();
-   
     printArgs();
     handler();
 
-    if (args != NULL)
-      free(args);
-    if (line != NULL)
-      line = NULL;
-
-  } while (state);
-
+    cleanup();
+  } 
   return 0;
 }

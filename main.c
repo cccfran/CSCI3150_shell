@@ -57,6 +57,7 @@ void launch() {
 
   pid = fork();
   if (pid == 0) {
+  
     // set the signal handling back to default
     signal(SIGINT, SIG_DFL);
     signal(SIGTERM, SIG_DFL);

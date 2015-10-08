@@ -55,8 +55,7 @@ void launch() {
   pid_t pid, wpid;
   int status;
 
-  pid = fork();
-  if (pid == 0) {
+  if ((pid = fork()) == 0) {
     // set the signal handling back to default
     signal(SIGINT, SIG_DFL);
     signal(SIGTERM, SIG_DFL);
@@ -72,7 +71,7 @@ void launch() {
     }
     exit(-1);
   } else if (pid < 0){
-    perror("Unknown error");
+    fprintf(stderr, "Unknown error");
   } else {
     wpid = waitpid(pid, &status, WUNTRACED);
   };
@@ -81,7 +80,7 @@ void launch() {
 void my_cd() {
   if (args[1] && !args[2]) {
     if (chdir(args[1]) == -1)
-      printf("[%s]: cannot change directory\n", args[1]);
+      fprintf(stderr, "%s: cannot change directory\n", args[1]);
   } else {
     fprintf(stderr, "cd: wrong number of arguments\n");
   }
@@ -113,8 +112,7 @@ void handler() {
   if (args == NULL) {
     return;
   }
-  if (builtInCommands() == 0) {
-    setenv("PATH","/bin:/usr/bin:.",1);    
+  if (!builtInCommands()) {
     launch();
   }
 }
@@ -132,7 +130,14 @@ void prompt() {
 }
 
 void getLine() {
+  /***
   if (getline(&line, &lineSize, stdin) == -1) {
+    printf("\n");
+    exit(EXIT_SUCCESS);
+  }
+  ***/
+  getline(&line, &lineSize, stdin);
+  if (feof(stdin)) {
     printf("\n");
     exit(EXIT_SUCCESS);
   }
@@ -154,6 +159,8 @@ int main(int argc, char **argv){
   signal(SIGQUIT,SIG_IGN); 
   signal(SIGTERM,SIG_IGN); 
   signal(SIGTSTP,SIG_IGN);
+
+  setenv ("PATH","/bin:/usr/bin:.",1);    
 
   while (state) {
     prompt();

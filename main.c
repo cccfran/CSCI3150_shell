@@ -293,17 +293,23 @@ void launch_job(Job* job) {
 void put_job_in_fg(Job *job, int signal) {
   Process *p = NULL;
   int status, is_suspended = 0;
-
+  tcsetpgrp(STDIN_FILENO, job->pgid);
+  printf("Now Input is %d\n",tcgetpgrp(STDIN_FILENO));
+  // tcsetpgrp(STDOUT_FILENO, job->pgid);
   // if resume
   if (signal)
     kill(job->pgid, SIGCONT);
   
+  // perror("Error:");
   printf("\tjob id: %d\n", job->pgid);
-  tcsetpgrp(STDIN_FILENO, job->pgid);
-  
+  printf("\tforeground job id: %d\n", tcgetpgrp(STDIN_FILENO));
+
+
   wait_for_job(job);
 
+  printf("Shell pgid: %d\n",shell_pgid);
   tcsetpgrp(STDIN_FILENO, shell_pgid);
+  printf("Shell is now: [%d]\n",tcgetpgrp(STDIN_FILENO));
 
   p = job->process_list;
   while (p) {
@@ -369,11 +375,18 @@ void launch_process(Process *p, int in, int out, pid_t pgid) {
 void wait_for_job(Job *job) {
   pid_t pid;
   int status;
+  Process *p;
   do {
-    pid = waitpid(WAIT_ANY, &status, WUNTRACED);
-    printf("WAIT PID %d\n", pid);
-    if (pid < 0)
-      return;
+    for (p = job->process_list; p; p = p->next) {
+ 
+          printf("\t\t\t\twait for job %d\n", p->pid);
+        pid = waitpid(p->pid, &status, WUNTRACED);
+        perror("waitpid");
+        printf("WAIT PID %d\n", pid);
+        if (pid < 0)
+          return;
+        }
+      
     update_process (pid, status);
   } while(!job_is_completed(job) && !job_is_suspended(job));
 }
@@ -578,7 +591,7 @@ void init_shell () {
     signal (SIGTSTP, SIG_IGN);
     signal (SIGTTIN, SIG_IGN);
     signal (SIGTTOU, SIG_IGN);
-    signal (SIGCHLD, SIG_IGN);
+    // signal (SIGCHLD, SIG_IGN);
 
     shell_pgid = getpid();
     printf("Shell pgid: %d\n", shell_pgid);
@@ -590,7 +603,7 @@ void init_shell () {
     tcsetpgrp(shell_terminal, shell_pgid);
 
     // Save default
-    tcgetattr(shell_terminal, &shell_tmodes);
+    // tcgetattr(shell_terminal, &shell_tmodes);
 }
 
 int main(int argc, char **argv){

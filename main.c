@@ -463,8 +463,8 @@ void my_fg() {
   Job *j;
   int job_num = atoi(process_list->arguments[1]); 
   j = find_job(job_num);
-  printf("Job wake up: %s\n", j->cmd);
   if (j) {
+    printf("Job wake up: %s\n", j->cmd);    
     reset_status(j);
     put_job_in_fg(j, 1);
   } else {
@@ -488,6 +488,7 @@ int builtInCommands() {
     return 1;
   }
   if (!strcmp("fg", process_list->cmd)) {
+    printf("put fg\n");
     my_fg();
     return 1;
   }
@@ -564,34 +565,32 @@ void init_shell () {
   shell_terminal = STDIN_FILENO;
   shell_is_interactive = isatty (shell_terminal);
 
-  if (shell_is_interactive) {
-    // loop until in the foreground
-    while (tcgetpgrp (shell_terminal) != (shell_pgid = getpgrp ()))
-      kill (- shell_pgid, SIGTTIN);
+  // loop until in the foreground
+  while (tcgetpgrp (shell_terminal) != (shell_pgid = getpgrp ()))
+    kill (- shell_pgid, SIGTTIN);
 
-      // set environment
-      setenv ("PATH","/bin:/usr/bin:.",1);    
+    // set environment
+    setenv ("PATH","/bin:/usr/bin:.",1);    
 
-      // ignore signal
-      signal (SIGINT, SIG_IGN);
-      signal (SIGQUIT, SIG_IGN);
-      signal (SIGTSTP, SIG_IGN);
-      signal (SIGTTIN, SIG_IGN);
-      signal (SIGTTOU, SIG_IGN);
-      signal (SIGCHLD, SIG_IGN);
+    // ignore signal
+    signal (SIGINT, SIG_IGN);
+    signal (SIGQUIT, SIG_IGN);
+    signal (SIGTSTP, SIG_IGN);
+    signal (SIGTTIN, SIG_IGN);
+    signal (SIGTTOU, SIG_IGN);
+    signal (SIGCHLD, SIG_IGN);
 
-      shell_pgid = getpid();
-      printf("Shell pgid: %d\n", shell_pgid);
-      if (setpgid(shell_pgid, shell_pgid) < 0) {
-        perror ("Couldn't put the shell in its own process group");
-        exit(1);
-      }
-      // Grab control of the terminal
-      tcsetpgrp(shell_terminal, shell_pgid);
+    shell_pgid = getpid();
+    printf("Shell pgid: %d\n", shell_pgid);
+    if (setpgid(shell_pgid, shell_pgid) < 0) {
+      perror ("Couldn't put the shell in its own process group");
+      exit(1);
+    }
+    // Grab control of the terminal
+    tcsetpgrp(shell_terminal, shell_pgid);
 
-      // Save default
-      tcgetattr(shell_terminal, &shell_tmodes);
-  }
+    // Save default
+    tcgetattr(shell_terminal, &shell_tmodes);
 }
 
 int main(int argc, char **argv){

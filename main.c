@@ -72,12 +72,12 @@ void my_bg();
 void my_cd();
 void my_exit();
 void my_fg();
-void my_job();
+void my_jobs();
 void printarg();
 void prompt();
 void split_line();
 void put_job_in_fg(Job *job, int signal);
-int update_process(pid_t pid, int status);
+int update_process(Job *job, pid_t pid, int status);
 void wait_for_job(Job *job);
 
 void init_job(Job *new_job) {
@@ -122,21 +122,31 @@ void delete_job(int job_num) {
       jptr = jptr->next;
     }
   }
+  printf("\t\t\tdel: %s\n", del->cmd);
   if (del == NULL){
     printf("Nothing to delete");
   } else {
-    if (pre && jptr) {
+    if (!pre && !jptr) { // only one jog
+      job_list = NULL;
+    } else if (pre && jptr) { // in the middle
       pre->next = jptr;
       while (jptr != NULL) {
         (jptr->job_num)--;
         jptr = jptr->next;
       }
-    } else if (!pre && !jptr) {
-      job_list = NULL;
-    }
+    } else if (!pre && jptr) { // delete the first job
+      job_list = jptr;
+      while (jptr != NULL) {
+        (jptr->job_num)--;
+        jptr = jptr->next;
+      }
+    } else if (pre && !jptr) { // delete the last job
+        pre->next = NULL;
+    } 
   }
   printf("Delete Job %d\n", del->job_num);
   free(del);
+  my_jobs();
 }
 
 void split_line() {
@@ -298,7 +308,7 @@ void put_job_in_fg(Job *job, int signal) {
   // tcsetpgrp(STDOUT_FILENO, job->pgid);
   // if resume
   if (signal)
-    kill(job->pgid, SIGCONT);
+    kill(- job->pgid, SIGCONT);
   
   // perror("Error:");
   printf("\tjob id: %d\n", job->pgid);
@@ -322,6 +332,7 @@ void put_job_in_fg(Job *job, int signal) {
   if (is_suspended) {
     printf("job %d suspended\n", job->job_num);
   } else {
+    printf("DELETE JOB: %s\n", job->cmd);
     delete_job(job->job_num);
   }
 }
@@ -335,6 +346,7 @@ void launch_process(Process *p, int in, int out, pid_t pgid) {
   signal(SIGTERM, SIG_DFL);
   signal(SIGQUIT, SIG_DFL);
   signal(SIGTSTP, SIG_DFL);
+
 
   for(n = 0; p->arguments[n] != NULL; n++){
     printf("\t\targ %d: %s\n", n, p->arguments[n]);
@@ -378,39 +390,56 @@ void wait_for_job(Job *job) {
   Process *p;
   do {
     for (p = job->process_list; p; p = p->next) {
- 
-          printf("\t\t\t\twait for job %d\n", p->pid);
-        pid = waitpid(p->pid, &status, WUNTRACED);
-        perror("waitpid");
-        printf("WAIT PID %d\n", pid);
-        if (pid < 0)
-          return;
-        }
+      printf("\t\t\t\twait for process %d\n", p->pid);
+      pid = waitpid(p->pid, &status, WUNTRACED);
+      perror("waitpid");
+      printf("WAIT PID %d\n", pid);
+      if (pid < 0)
+        return;
       
-    update_process (pid, status);
+      update_process (job, pid, status);
+    }
   } while(!job_is_completed(job) && !job_is_suspended(job));
 }
 
-int update_process(pid_t pid, int status) {
-  Job *j;
+int update_process(Job *job, pid_t pid, int status) {
+  // Job *j;
+  // Process *p;
+  // for (j = job_list; j; j = j->next)
+  //   for (p = process_list; p; p = p->next)
+  //     if (p->pid == pid) {
+  //       p->status = status;
+  //       if (WIFSTOPPED(status)) {
+  //         p->suspended = 1;
+  //         printf("\tSuspended\n");
+  //       }
+  //       else {
+  //         p->completed = 1;
+  //         printf("\tPID %d completed\n", pid);
+  //         p->status = WEXITSTATUS(status);
+  //       }
+  //       return 0;
+  //     }
+  //   fprintf (stderr, "No child process %d.\n", pid);
+  //   return -1;
+
   Process *p;
-  for (j = job_list; j; j = j->next)
-    for (p = process_list; p; p = p->next)
-      if (p->pid == pid) {
-        p->status = status;
-        if (WIFSTOPPED(status)) {
-          p->suspended = 1;
-          printf("\tSuspended\n");
-        }
-        else {
-          p->completed = 1;
-          printf("\tPID %d completed\n", pid);
-          p->status = WEXITSTATUS(status);
-        }
-        return 0;
+  for (p = job->process_list; p; p = p->next)
+    if (p->pid == pid) {
+      p->status = status;
+      if (WIFSTOPPED(status)) {
+        p->suspended = 1;
+        printf("\tSuspended\n");
       }
-    fprintf (stderr, "No child process %d.\n", pid);
-    return -1;
+      else {
+        p->completed = 1;
+        printf("\tPID %d completed\n", pid);
+        p->status = WEXITSTATUS(status);
+      }
+      return 0;
+    }
+  fprintf (stderr, "No child process %d.\n", pid);
+  return -1;  
 }
 
 int job_is_completed(Job* job) {
@@ -455,14 +484,18 @@ void my_cd() {
 }
 
 void my_exit() {
-  if (process_list->arg_count != 1) {
-    fprintf(stderr, "exit: wrong number of arguments");
+  if (job_list) {
+    printf("There is at least one suspended job\n");
   } else {
-    exit(EXIT_SUCCESS);
+    if (process_list->arg_count != 1) {
+      fprintf(stderr, "exit: wrong number of arguments\n");
+    } else {
+      exit(EXIT_SUCCESS);
+    }
   }
 }
 
-void my_job() {
+void my_jobs() {
   Job *j = job_list;
   if (j == NULL) 
     printf("No suspended job\n");
@@ -473,15 +506,19 @@ void my_job() {
 }
 
 void my_fg() {
-  Job *j;
-  int job_num = atoi(process_list->arguments[1]); 
-  j = find_job(job_num);
-  if (j) {
-    printf("Job wake up: %s\n", j->cmd);    
-    reset_status(j);
-    put_job_in_fg(j, 1);
+  if (process_list->arg_count != 2) {
+    fprintf(stderr, "exit: wrong number of arguments\n");
   } else {
-    printf("fg: no such job\n");
+    Job *j;
+    int job_num = atoi(process_list->arguments[1]); 
+    j = find_job(job_num);
+    if (j) {
+      printf("Job wake up: %s\n", j->cmd);
+      reset_status(j);
+      put_job_in_fg(j, 1);
+    } else {
+      printf("fg: no such job\n");
+    }
   }
 }
 
@@ -497,7 +534,7 @@ int builtInCommands() {
   }
   if (!strcmp("jobs", process_list->cmd)) {
     printf("list job.\n");
-    my_job();
+    my_jobs();
     return 1;
   }
   if (!strcmp("fg", process_list->cmd)) {
@@ -591,6 +628,8 @@ void init_shell () {
     signal (SIGTSTP, SIG_IGN);
     signal (SIGTTIN, SIG_IGN);
     signal (SIGTTOU, SIG_IGN);
+    signal (SIGTERM, SIG_IGN);
+
     // signal (SIGCHLD, SIG_IGN);
 
     shell_pgid = getpid();

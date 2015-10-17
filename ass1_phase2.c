@@ -1,275 +1,257 @@
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
-#include <limits.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <glob.h>
 
 #define INPUT_MAX 257
 
-//Define cutom structures
-typedef struct invocation_s inv;
-typedef struct job_s job;
-
-struct job_s {
-    int job_count;
-    char cmdinput[INPUT_MAX]; //For printing cmd
-    char pipeline[INPUT_MAX]; //For inv args ptr
-    int inv_num;
-    inv *invs[INPUT_MAX/4];
-    job *next_job;
-    job *prev_job;
-};
-
-struct invocation_s {
+typedef struct inv_s{
     int arg_num;
-    char *args[INPUT_MAX/2];
+    char **args;
+    int args_capacity;
     pid_t process_id;
-};
+    short is_completed;
+} inv;
 
-//Define global variables
-char cwd[PATH_MAX];
-char input[INPUT_MAX];
-char* job_cmd;
-job* job_new;
+typedef struct job_s{
+    int timestamp;
+    char jobname[INPUT_MAX]; //for job printing
+    char pipeline[INPUT_MAX]; //for args ptr
+    int inv_num;
+    struct inv_s *invs[INPUT_MAX/4];
+    struct job_s *next_job;
+} job;
+
+//Global variables
 job* job_list;
-int init_job_count;
+int job_count;
 glob_t wildcards;
 short wc_flag;
 int wc_count;
+//Global variables for new command
+char cwd[PATH_MAX];
+char input[INPUT_MAX];
+job* job_new;
 
-//Declare functions for custom structures
-job* init_job(char *input);
-void free_job(job* job_node);
-job* last_job(void);
+//Functions for struct job
+job* init_job(void);
+job* init_job_node(char *job_cmd);
 void add_job(job* job_node);
-void delete_job(job *job_node);
-job* get_job_by_pid(pid_t job_pid);
-job* get_job_by_fg(int fg_num);
+job* delete_and_get_job_by_fg(int fg_num);
 void print_job_list(void);
-void print_job_list_reverse(void);
-void print_job(job* job_node);
+void print_job_node(job* job_node);
+//Functions for struct inv
 inv* init_inv(void);
-void free_inv(inv* inv_node);
 
-//Declare functions for shell
-//For first read of command
+//Functions for shell
 void init_shell(void);
 void getinput(void);
-short create_job(void);
+void create_job(void);
 void parse(void);
+void check_args_mem(inv *inv_node, int expand_size);
 void add_wildcards(char* pattern);
 void execute(void);
 void exe_cd(void);
 void exe_exit(void);
 void exe_jobs(void);
 void exe_fg(void);
-void exe_single(void);
-void exe_pipe(void);
+void exe_no_pipe(void);
+void exe_program(void);
+void init_child_process(void);
 void wait_child_processes(job* job_node);
 
-//Functions for structure job
-job* init_job(char *input){
-    job* tmp = (job*)malloc(sizeof(job));
-    strcpy(tmp->cmdinput, input);
-    strcpy(tmp->pipeline, input);
-    tmp->job_count = ++init_job_count;
+job* init_job(void){
+    job *tmp = (job*)malloc(sizeof(job));
+    tmp->timestamp = job_count++;
     tmp->inv_num = 0;
     tmp->next_job = NULL;
-    tmp->prev_job = NULL;
     return tmp;
 }
 
-job* init_job_list(){
-    job* tmp = (job*)malloc(sizeof(job));
-    strcpy(tmp->cmdinput, "list head");
-    tmp->job_count = init_job_count;
-    tmp->inv_num = 0;
-    tmp->next_job = NULL;
-    tmp->prev_job = NULL;
+job* init_job_node(char *job_cmd){
+    job *tmp = init_job();
+    strcpy(tmp->jobname, job_cmd);
+    strcpy(tmp->pipeline, job_cmd);
+    //printf("*debug* init_job_node: job_cmd = %s\n", job_cmd); 
+    //printf("*debug* init_job_node: tmp->jobname = %s\n", tmp->jobname);
+    //printf("*debug* init_job_node: tmp->pipeline = %s\n", tmp->pipeline);
     return tmp;
-}
-
-void free_job(job* job_node){
-    int i;
-    for (i = 0; i < job_node->inv_num; i++)
-        free_inv(job_node->invs[i]);
-    free(job_node);
-}
-
-job* last_job(void){
-    job* job_node = job_list;
-    while (job_node->next_job)
-        job_node = job_node->next_job;
-    return job_node;
 }
 
 void add_job(job* job_node){
-    job* tmp;
-    for (tmp = job_list; tmp->next_job; tmp = tmp->next_job){
-        if (job_node->job_count < tmp->next_job->job_count){
-            job_node->prev_job = tmp;
-            job_node->next_job = tmp->next_job; 
-            tmp->next_job->prev_job = job_node;
-            tmp->next_job = job_node;
-            break;
-        }
-    }
-    //if job_node is newer than all job in list, i.e. tmp is the last job
-    tmp->next_job = job_node;
-    job_node->prev_job = tmp;
-}
-
-void delete_job(job *job_node){
-    print_job_list_reverse();
-    if (job_node->next_job){
-        job_node->next_job->prev_job = job_node->prev_job;
-        job_node->prev_job->next_job = job_node->next_job;
-    }else {
-        job_node->prev_job->next_job = NULL;
-    }
-    job_node->next_job = NULL;
-    job_node->prev_job = NULL;
-}
-
-job* get_job_by_pid(pid_t job_pid){
-    job* tmp = job_list->next_job;
-    while(tmp){
-        int i;
-        for (i = 0; i < tmp->inv_num; i++){
-            if (tmp->invs[i]->process_id == job_pid)
-                return tmp;
-        }
-        tmp = tmp->next_job;
-    }
-    return NULL;
-}
-
-job* get_job_by_fg(int fg_num){
-    job* tmp = job_list;
-    int i;
-    for (i = 0; i < fg_num; i++){
-        if (i == (fg_num)-1 && tmp->next_job)
-            tmp = tmp->next_job;
+    job* job_ptr = job_list;
+    while (job_ptr->next_job){
+        if (job_node->timestamp > job_ptr->next_job->timestamp)
+            job_ptr = job_ptr->next_job;
         else
-            return NULL;
+            break;
     }
-    return tmp;
+    job_node->next_job = job_ptr->next_job;
+    job_ptr->next_job = job_node;
 }
-void print_job(job* job_node){
-    int i, j;
-    printf("inv number: %d\n", job_node->inv_num);
-    for (i = 0; i < job_node->inv_num ; i++){
-        printf("arg num: %d\n", job_node->invs[i]->arg_num);
-        for (j = 0; j < job_node->invs[i]->arg_num; j++)
-            printf("%s\t", job_node->invs[i]->args[j]);
-        printf("NULL\n");
+
+job* delete_and_get_job_by_fg(int fg_num){
+    //printf("*debug* delete_and_get_job_by_fg: entered\n");
+    job *job_ptr = job_list, *job_node;
+    int i;
+    for (i = 1; i < fg_num; i++){
+        if (job_ptr->next_job)
+            job_ptr = job_ptr->next_job;
+        else {
+            //printf("*debug* delete_and_get_job_by_fg: fg_num too large\n");
+            return NULL;
+        }
     }
+    if (!job_ptr->next_job)
+        return NULL;
+    job_node = job_ptr->next_job;
+    job_ptr->next_job = job_node->next_job;
+    //printf("*debug* delete_and_get_job_by_fg: leave\n");
+    return job_node;
 }
 
 void print_job_list(void){
     job* job_node = job_list->next_job;
     int job_count;
-    for (job_count = 1; job_node; job_node = job_node->next_job, job_count++)
-        printf("[%d] %s\n", job_count, job_node->cmdinput);
-}
-void print_job_list_reverse(void){
-    job* job_node = last_job();
-    int job_count;
-    for (job_count = 0; job_node; job_node = job_node->prev_job, job_count++)
-        printf("[%d] %s\n", job_count, job_node->cmdinput);
+    //is the job_node = job_node->next_job ok?
+    // so this loop runs indefintely
+    // why when without pipe it works then?
+    // shouldb't be this problem?
+    // is next_job == NULL supposed to be, each job is initiated with next_job = NULL
+    // ok
+    //the problem is in this function?
+
+    for (job_count = 1; job_node; job_count++){
+        printf("[%d] %s\n", job_count, job_node->jobname);
+        job_node = job_node->next_job;
+    }
+    if (job_count == 1)
+        printf("No suspended jobs\n");
 }
 
-//Functions for structure inv
+void print_job_node(job* job_node){
+    printf("job cmd: %s; inv_num: %d; arg_num:", job_node->jobname, job_node->inv_num);
+    int i;
+    for (i=0; i < job_node->inv_num; i++)
+        printf(" %d", job_node->invs[i]->arg_num);
+    if (job_node->invs[i]->process_id != 1){
+        printf("; process_id: ");
+        for (i=0; i < job_node->inv_num; i++)
+            printf(" %d", job_node->invs[i]->process_id);
+    } else
+        printf("; not yet executed");
+    if (job_node->next_job)
+        printf("; next_job: %s", job_node->next_job->jobname);
+    else
+        printf("; next_job: no next jobs");
+    printf("\n");
+}
+
 inv* init_inv(void){
-    inv *tmp = (inv*)malloc(sizeof(inv));
+    inv* tmp = (inv*)malloc(sizeof(inv));
     tmp->arg_num = 0;
+    tmp->args = (char**)malloc(sizeof(char*)*(INPUT_MAX/2));
+    tmp->args_capacity = INPUT_MAX/2;
+    tmp->process_id = 1;
+    tmp->is_completed = 0;
     return tmp;
 }
 
-void free_inv(inv* inv_node){
-    free(inv_node);
-}
-
-//Shell Functions
 void init_shell(void){
+    //printf("*debug* init_shell: entered\n");
     setenv("PATH", "/bin:/usr/bin:.", 1);
-    signal(SIGINT,SIG_IGN);
-    //signal(SIGQUIT,SIG_IGN);
-    signal(SIGTERM,SIG_IGN);
-    signal(SIGTSTP,SIG_IGN);
+    signal(SIGINT, SIG_IGN);
+    //signal(SIGQUIT, SIG_IGN);
+    signal(SIGTERM, SIG_IGN);
+    signal(SIGTSTP, SIG_IGN);
+    //printf("*debug* init_shell: after change signal handler\n");
 
-    job_list = init_job_list();
-
+    job_list = init_job();
+    //printf("*debug* init_shell: after init_job\n");
+    job_count = 0;
     wc_flag = 0;
     wc_count = 0;
-    init_job_count = 0;
+    //printf("*debug* init_shell: leave\n");
 }
+
 void getinput(void){
     getcwd(cwd, PATH_MAX);
     printf("[3150 shell:%s]$ ", cwd);
-    if (!fgets(input, INPUT_MAX, stdin)) {
+    if (!fgets(input, INPUT_MAX, stdin)){
         printf("\n");
         exit(EXIT_SUCCESS);
     }
+    //printf("*debug* getinput: input = %s, input len = %d\n", input, strlen(input));
     input[strlen(input)-1] = '\0';
+    //if (input)
+    //    printf("*debug* getinput: input = %s, input len = %d\n", input, strlen(input));
+    //else
+    //    printf("*debug* getinput: input is null\n");
 }
 
-short create_job(void){
-    job_new = init_job(input);
-    job_cmd = job_new->pipeline;
-    return 0;
+void create_job(void){
+    //printf("*debug* create_job: input = %s\n", input);
+    job_new = init_job_node(input);
 }
 
 void parse(void){
-    job_new->invs[0] = init_inv();
+    //printf("*debug* parse: entered\n");
+    char *job_cmd = job_new->pipeline;
+    //printf("*debug* parse: job_new->pipeline = %s\n", job_new->pipeline);
+    //printf("*debug* parse: job_cmd = %s\n", job_cmd);
+    job_new->invs[0]= init_inv();
     int *inv_count = &(job_new->inv_num),
         *arg_count = &(job_new->invs[0]->arg_num);
 
     char *tok = strtok(job_cmd, " ");
-    //printf("tok: %s, ", tok);
-    //printf("inv_c: %d, arg_c: %d (nor)\n", *inv_count, *arg_count);
-    job_new->invs[*inv_count]->args[*arg_count] = tok;
-    (*arg_count)++;
+    //printf("*debug* parse: get first tok, which is %s\n", tok);
+    job_new->invs[*inv_count]->args[(*arg_count)++] = tok;
 
     while(tok != NULL){
         tok = strtok(NULL, " ");
-        //printf("tok: %s, ", tok);
         if (!tok)
-        {
-            //printf("inv_c: %d, arg_c: %d (null)\n", *inv_count, *arg_count);
-            job_new->invs[*inv_count]->args[*arg_count] = NULL;
-        }
-        else if (strcmp(tok, "|")){
-            if (strstr(tok, "*"))
-            {
-                //printf("expand wildcard\n");
+            break;
+
+        if (strcmp(tok, "|")){
+            if (strstr(tok, "*")){
                 add_wildcards(tok);
-                for (wc_count; wc_count < wildcards.gl_pathc; wc_count++){
-                    //printf("\ttok: %s, inv_c: %d, arg_c: %d (wc)\n", wildcards.gl_pathv[wc_count], *inv_count, *arg_count);
+                check_args_mem(job_new->invs[*inv_count], (wildcards.gl_pathc - wc_count));
+                for (; wc_count < wildcards.gl_pathc; wc_count++)
                     job_new->invs[*inv_count]->args[(*arg_count)++] = wildcards.gl_pathv[wc_count];
-                }
-            }
-            else {
-                //printf("inv_c: %d, arg_c: %d (nor)\n", *inv_count, *arg_count);
+            } else{
+                check_args_mem(job_new->invs[*inv_count], 1);
                 job_new->invs[*inv_count]->args[(*arg_count)++] = tok;
             }
         } else {
-            //printf("inv_c: %d, arg_c: %d (pipe)\n", *inv_count, *arg_count);
-            job_new->invs[*inv_count]->args[*arg_count] = NULL;
-            (*inv_count)++;
+            job_new->invs[(*inv_count)++]->args[*arg_count] = NULL;
             job_new->invs[*inv_count] = init_inv();
             arg_count = &(job_new->invs[*inv_count]->arg_num);
-            //printf("----- pipe: inv_c=%d, arg_c=%d\n", *inv_count, *arg_count);
         }
     }
-    (*inv_count)++;
+    job_new->invs[(*inv_count)++]->args[*arg_count] = NULL;
 }
 
-void add_wildcards(char *pattern){
+void check_args_mem(inv *inv_node, int expand_size){
+    int capacity = inv_node->args_capacity;
+    if (inv_node->arg_num == (capacity - expand_size)){
+        if (!realloc(inv_node->args, sizeof(char*)*(capacity + expand_size))){
+            char** args_tmp = malloc(sizeof(char*)*(capacity + expand_size));
+            int i;
+            for (i = 0; i < capacity; i++)
+                args_tmp[i] = inv_node->args[i];
+            free(inv_node->args);
+            inv_node->args = args_tmp;
+        }
+        inv_node->args_capacity += expand_size;
+    }
+}
+
+void add_wildcards(char* pattern){
     if (wc_flag)
         glob(pattern, GLOB_NOCHECK | GLOB_APPEND, NULL, &wildcards);
     else {
@@ -279,7 +261,9 @@ void add_wildcards(char *pattern){
 }
 
 void execute(void){
-    char* first_tok = job_new->invs[0]->args[0];
+    //printf("*debug* execute: entered\n");
+    char *first_tok = job_new->invs[0]->args[0];
+    //printf("*debug* execute: get first_tok, which is %s\n", first_tok);
     if (!strcmp(first_tok, "cd"))
         exe_cd();
     else if (!strcmp(first_tok, "exit"))
@@ -288,13 +272,12 @@ void execute(void){
         exe_jobs();
     else if (!strcmp(first_tok, "fg"))
         exe_fg();
-    else if (job_new->inv_num == 1)
-        exe_single();
     else
-        exe_pipe();
+        exe_program();
 }
 
 void exe_cd(void){
+    //printf("*debug* cd: entered\n");
     if (job_new->inv_num != 1 || job_new->invs[0]->arg_num != 2)
         printf("cd: wrong number of arguments\n");
     else {
@@ -306,6 +289,7 @@ void exe_cd(void){
 }
 
 void exe_exit(void){
+    //printf("*debug* exit: entered\n");
     if (job_new->inv_num != 1 || job_new->invs[0]->arg_num != 1)
         printf("exit: wrong number of arguments\n");
     else if (job_list->next_job)
@@ -321,7 +305,6 @@ void exe_jobs(void){
         print_job_list();
     else
         printf("No suspended jobs\n");
-        
 }
 
 void exe_fg(void){
@@ -329,35 +312,25 @@ void exe_fg(void){
         printf("fg: wrong number of arguments\n");
     else {
         int fg_num = (int)strtol(job_new->invs[0]->args[1], NULL, 10);
-        job* job_node = get_job_by_fg(fg_num);
+        job* job_node = delete_and_get_job_by_fg(fg_num);
         if (job_node){
-            printf("before delete job_node from list\n");
-            delete_job(job_node);
             int i;
-            printf("job_node: ");
-            print_job(job_node);
             for (i = 0; i < job_node->inv_num; i++){
                 pid_t wake_pid = job_node->invs[i]->process_id;
-                printf("sending signal to process %d\n", wake_pid);
                 kill(wake_pid, SIGCONT);
             }
-            printf("all signal sent\n");
             wait_child_processes(job_node);
         } else
             printf("fg: no such job\n");
     }
 }
 
-void exe_single(void){
+void exe_no_pipe(void){
     char **args = job_new->invs[0]->args;
     pid_t fork_pid = fork();
 
     if (fork_pid == 0){
-        signal(SIGINT,SIG_DFL);
-        signal(SIGQUIT,SIG_DFL);
-        signal(SIGTERM,SIG_DFL);
-        signal(SIGTSTP,SIG_DFL);
-
+        init_child_process(); //just changing signal handling
         if (execvp(*args, args) == -1) {
             if (errno == ENOENT)
                 printf("%s: command not found\n", args[0]);
@@ -367,86 +340,113 @@ void exe_single(void){
         }
     } else if (fork_pid == -1)
         printf("%s: unknown error\n", args[0]);
-    else
+    else {
+        job_new->invs[0]->process_id = fork_pid;
         wait_child_processes(job_new);
+    }
 }
 
-void exe_pipe(void){
-    pid_t fork_pid;
+void exe_program(void){
+    int pipefd[2];
+
+    int in = STDIN_FILENO, out;
     char **args;
-    int inv_c = job_new->inv_num;
-    int pipefd[2], in = STDIN_FILENO, out;
+    pid_t fork_pid;
+
     int i;
-    for (i = 0; i < inv_c ; i++){
-        if (i == inv_c - 1){
-            pipe(pipefd);
-            out = pipefd[STDOUT_FILENO];
-        } else
+    for (i = 0; i < job_new->inv_num; i++){
+        if (job_new->inv_num - 1 - i == 0)
             out = STDOUT_FILENO;
+        else{
+            pipe(pipefd);
+            out = pipefd[1];
+        }
 
         args = job_new->invs[i]->args;
         fork_pid = fork();
         if (fork_pid == 0){
-            signal(SIGINT,SIG_DFL);
-            signal(SIGQUIT,SIG_DFL);
-            signal(SIGTERM,SIG_DFL);
-            signal(SIGTSTP,SIG_DFL);
+            init_child_process();
 
+            // this is not the first invocation
             if (in != STDIN_FILENO){
                 dup2(in, STDIN_FILENO);
                 close(in);
             }
+
+            // this is not the last invocation
             if (out != STDOUT_FILENO){
                 dup2(out, STDOUT_FILENO);
                 close(out);
+                close(pipefd[0]);
             }
 
             if (execvp(*args, args) == -1) {
                 if (errno == ENOENT)
-                    printf("%s: command not found\n", args[0]);
+                // don't use stdout, use stderr. stdout is redirected to the pipe
+                // is stderr printed in terminal? yes
+                // cannot use printf? use fprtinf(stderr, ""); "" is the string? yes
+                    fprintf(stderr, "%s: command not found\n", args[0]);
                 else
                     printf("%s: unknown error\n", args[0]);
                 exit(EXIT_FAILURE);
             }
         } else if (fork_pid == -1)
             printf("%s: unknown error\n", args[0]);
-        else
-            job_new->invs[i]->process_id = getpid();
-
-        if (in != STDIN_FILENO)
-            close(in);
-        if (out != STDOUT_FILENO)
-            close(out);
-        in = pipefd[STDIN_FILENO];
+        else {
+            job_new->invs[i]->process_id = fork_pid;
+            if (out != STDOUT_FILENO)
+                close(out);
+            if (in !=  STDIN_FILENO)
+                close(in);
+            in = pipefd[0];
+        }
     }
+
     if (fork_pid > 0)
         wait_child_processes(job_new);
 }
 
+void init_child_process(void){
+    signal(SIGINT,SIG_DFL);
+    signal(SIGQUIT,SIG_DFL);
+    signal(SIGTERM,SIG_DFL);
+    signal(SIGTSTP,SIG_DFL);
+}
+
 void wait_child_processes(job* job_node){
-    int i;
-    int status;
+    int i, status;
     for (i = 0; i < job_node->inv_num; i++){
+        if (job_node->invs[i]->is_completed)
+            continue;
         waitpid(job_node->invs[i]->process_id, &status, WUNTRACED);
         if (WIFSTOPPED(status)){
-            printf("suspend signal detected\n");
-            add_job(job_new);
+            add_job(job_node);
             break;
         }
+        else
+            job_node->invs[i]->is_completed = 1;
     }
-    free_job(job_node);
+    //For job with no pipe
+    //int status;
+    //waitpid(job_node->invs[0]->process_id, &status, WUNTRACED);
+    //if (WIFSTOPPED(status))
+    //    add_job(job_node);
 }
 
 int main(void){
     init_shell();
+    //printf("*debug* main: after init_shell()\n");
     while(1){
         getinput();
-        if(!input)
+        //printf("*debug* main: after getinput()\n");
+        if (!strlen(input))
             continue;
         create_job();
+        //printf("*debug* main: after create_job()\n");
         parse();
-        print_job(job_new);
+        //printf("*debug* main: after parse()\n");
         execute();
+        //printf("*debug* main: after execute()\n");
     }
     return 0;
 }

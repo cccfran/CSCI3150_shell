@@ -60,7 +60,6 @@ void exe_cd(void);
 void exe_exit(void);
 void exe_jobs(void);
 void exe_fg(void);
-void exe_no_pipe(void);
 void exe_program(void);
 void init_child_process(void);
 void wait_child_processes(job* job_node);
@@ -118,13 +117,6 @@ job* delete_and_get_job_by_fg(int fg_num){
 void print_job_list(void){
     job* job_node = job_list->next_job;
     int job_count;
-    //is the job_node = job_node->next_job ok?
-    // so this loop runs indefintely
-    // why when without pipe it works then?
-    // shouldb't be this problem?
-    // is next_job == NULL supposed to be, each job is initiated with next_job = NULL
-    // ok
-    //the problem is in this function?
 
     for (job_count = 1; job_node; job_count++){
         printf("[%d] %s\n", job_count, job_node->jobname);
@@ -166,7 +158,7 @@ void init_shell(void){
     //printf("*debug* init_shell: entered\n");
     setenv("PATH", "/bin:/usr/bin:.", 1);
     signal(SIGINT, SIG_IGN);
-    //signal(SIGQUIT, SIG_IGN);
+    signal(SIGQUIT, SIG_IGN);
     signal(SIGTERM, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
     //printf("*debug* init_shell: after change signal handler\n");
@@ -237,17 +229,9 @@ void parse(void){
 }
 
 void check_args_mem(inv *inv_node, int expand_size){
-    int capacity = inv_node->args_capacity;
-    if (inv_node->arg_num == (capacity - expand_size)){
-        if (!realloc(inv_node->args, sizeof(char*)*(capacity + expand_size))){
-            char** args_tmp = malloc(sizeof(char*)*(capacity + expand_size));
-            int i;
-            for (i = 0; i < capacity; i++)
-                args_tmp[i] = inv_node->args[i];
-            free(inv_node->args);
-            inv_node->args = args_tmp;
-        }
-        inv_node->args_capacity += expand_size;
+    if (inv_node->arg_num + expand_size > inv_node->args_capacity){
+        inv_node->args = realloc(inv_node->args, sizeof(char*)*(inv_node->arg_num + expand_size + 1));
+        inv_node->args_capacity = inv_node->arg_num + expand_size + 1;
     }
 }
 
@@ -311,7 +295,14 @@ void exe_fg(void){
     if (job_new->inv_num != 1 || job_new->invs[0]->arg_num != 2)
         printf("fg: wrong number of arguments\n");
     else {
-        int fg_num = (int)strtol(job_new->invs[0]->args[1], NULL, 10);
+        char *endptr;
+            
+        int fg_num = (int)strtol(job_new->invs[0]->args[1], &endptr, 10);
+        if (*endptr != '\0'){
+            printf("fg: wrong arguments\n");
+            return;
+        }
+        
         job* job_node = delete_and_get_job_by_fg(fg_num);
         if (job_node){
             int i;
@@ -322,27 +313,6 @@ void exe_fg(void){
             wait_child_processes(job_node);
         } else
             printf("fg: no such job\n");
-    }
-}
-
-void exe_no_pipe(void){
-    char **args = job_new->invs[0]->args;
-    pid_t fork_pid = fork();
-
-    if (fork_pid == 0){
-        init_child_process(); //just changing signal handling
-        if (execvp(*args, args) == -1) {
-            if (errno == ENOENT)
-                printf("%s: command not found\n", args[0]);
-            else
-                printf("%s: unknown error\n", args[0]);
-            exit(EXIT_FAILURE);
-        }
-    } else if (fork_pid == -1)
-        printf("%s: unknown error\n", args[0]);
-    else {
-        job_new->invs[0]->process_id = fork_pid;
-        wait_child_processes(job_new);
     }
 }
 
@@ -367,14 +337,11 @@ void exe_program(void){
         if (fork_pid == 0){
             init_child_process();
 
-            // this is not the first invocation
-            if (in != STDIN_FILENO){
+            if (in != STDIN_FILENO){ //Not first invocation
                 dup2(in, STDIN_FILENO);
                 close(in);
             }
-
-            // this is not the last invocation
-            if (out != STDOUT_FILENO){
+            if (out != STDOUT_FILENO){ //Not last invocation
                 dup2(out, STDOUT_FILENO);
                 close(out);
                 close(pipefd[0]);
@@ -382,9 +349,6 @@ void exe_program(void){
 
             if (execvp(*args, args) == -1) {
                 if (errno == ENOENT)
-                // don't use stdout, use stderr. stdout is redirected to the pipe
-                // is stderr printed in terminal? yes
-                // cannot use printf? use fprtinf(stderr, ""); "" is the string? yes
                     fprintf(stderr, "%s: command not found\n", args[0]);
                 else
                     printf("%s: unknown error\n", args[0]);
@@ -426,27 +390,17 @@ void wait_child_processes(job* job_node){
         else
             job_node->invs[i]->is_completed = 1;
     }
-    //For job with no pipe
-    //int status;
-    //waitpid(job_node->invs[0]->process_id, &status, WUNTRACED);
-    //if (WIFSTOPPED(status))
-    //    add_job(job_node);
 }
 
 int main(void){
     init_shell();
-    //printf("*debug* main: after init_shell()\n");
     while(1){
         getinput();
-        //printf("*debug* main: after getinput()\n");
         if (!strlen(input))
             continue;
         create_job();
-        //printf("*debug* main: after create_job()\n");
         parse();
-        //printf("*debug* main: after parse()\n");
         execute();
-        //printf("*debug* main: after execute()\n");
     }
     return 0;
 }

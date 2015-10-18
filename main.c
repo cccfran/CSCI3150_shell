@@ -53,7 +53,6 @@ size_t numtokens;
 int numpipes;
 int state = 1;
 Process *process_list = NULL;
-int pipes[MAXPIPE][2];
 Job *job_list = NULL;
 
 int builtInCommands();
@@ -148,8 +147,8 @@ void delete_job(int job_num) {
   Process *p = del->process_list, *tmp = NULL;
   while (p) {
     tmp = p;
-    cleanup(p);
     p = tmp->next;
+    cleanup(tmp);
   }
   free(del);
   my_jobs();

@@ -54,7 +54,7 @@ int numpipes;
 int state = 1;
 Process *process_list = NULL;
 int pipes[MAXPIPE][2];
-Job *job_list = NULL, *curr = NULL;
+Job *job_list = NULL;
 
 int builtInCommands();
 void cleanup();
@@ -145,6 +145,12 @@ void delete_job(int job_num) {
     } 
   }
   printf("Delete Job %d\n", del->job_num);
+  Process *p = del->process_list, *tmp = NULL;
+  while (p) {
+    tmp = p;
+    cleanup(p);
+    p = tmp->next;
+  }
   free(del);
   my_jobs();
 }
@@ -302,7 +308,7 @@ void launch_job(Job* job) {
 
 void put_job_in_fg(Job *job, int signal) {
   Process *p = NULL;
-  int status, is_suspended = 0;
+  int is_suspended = 0;
   tcsetpgrp(STDIN_FILENO, job->pgid);
   printf("Now Input is %d\n",tcgetpgrp(STDIN_FILENO));
   // tcsetpgrp(STDOUT_FILENO, job->pgid);
@@ -391,6 +397,8 @@ void wait_for_job(Job *job) {
   do {
     for (p = job->process_list; p; p = p->next) {
       printf("\t\t\t\twait for process %d\n", p->pid);
+      if (p->completed)
+        continue;
       pid = waitpid(p->pid, &status, WUNTRACED);
       perror("waitpid");
       printf("WAIT PID %d\n", pid);
@@ -403,26 +411,6 @@ void wait_for_job(Job *job) {
 }
 
 int update_process(Job *job, pid_t pid, int status) {
-  // Job *j;
-  // Process *p;
-  // for (j = job_list; j; j = j->next)
-  //   for (p = process_list; p; p = p->next)
-  //     if (p->pid == pid) {
-  //       p->status = status;
-  //       if (WIFSTOPPED(status)) {
-  //         p->suspended = 1;
-  //         printf("\tSuspended\n");
-  //       }
-  //       else {
-  //         p->completed = 1;
-  //         printf("\tPID %d completed\n", pid);
-  //         p->status = WEXITSTATUS(status);
-  //       }
-  //       return 0;
-  //     }
-  //   fprintf (stderr, "No child process %d.\n", pid);
-  //   return -1;
-
   Process *p;
   for (p = job->process_list; p; p = p->next)
     if (p->pid == pid) {
@@ -457,7 +445,7 @@ int job_is_suspended(Job* job) {
   Process* p = job->process_list;
   while (p) {
     printf("\tSuspended? %d\n", p->suspended);    
-    if (!p->suspended)
+    if (!p->suspended && !p->completed)
       return 0;
     p = p->next;
   }
@@ -468,8 +456,6 @@ void reset_status(Job *j) {
   Process *p = j->process_list;
   while (p) {
     p->suspended = 0;
-    p->completed = 0;
-    p->status = 0;
     p = p->next;
   }
 }
@@ -655,7 +641,9 @@ int main(int argc, char **argv){
     printarg();
     handler();
 
+
     process_list = NULL;
+    free(line);
     line = NULL;
   } 
   return 0;
